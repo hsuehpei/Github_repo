@@ -4,11 +4,15 @@ import os
 import sys
 import re
 import logging
+from dotenv import load_dotenv
+
+load_dotenv()
+token = os.getenv("tg_token")
+chatID = os.getenv("tg_gp_chatID")
 
 CURRENTDAY = datetime.now().strftime("%Y%m%d")
-# LOG_FILE = f"C:/Users/admin/Desktop/OPO/Github_fork/history_file/log/github_fork_{CURRENTDAY}.log"
 
-def send_msg(logfile, token="7593431181:AAH--Rj_4njknzxJtAr5j_b0CyrlPWpZPqE", chatID="-1002472057533"): # -4276625396 data  # -1002472057533 meeee
+def send_msg(logfile, token=token, chatID=chatID):
     with open(logfile, mode="rt", encoding='utf-8') as inpf:
         latest = None
         log_lines = inpf.readlines()
