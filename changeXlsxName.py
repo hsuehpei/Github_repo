@@ -2,16 +2,16 @@
 from datetime import datetime
 import os
 import logging
-import glob
 import time
 
 DIR = os.getcwd()
 CURRENTDAY = datetime.now().strftime("%Y%m%d")
 
-SAVE_DIR = os.path.abspath(os.path.join(DIR, "history_file"))
-LOG_FILE = os.path.abspath(os.path.join(DIR, f"history_file/log/github_fork_{CURRENTDAY}.log"))
-LOG_FOLDER = os.path.abspath(os.path.join(DIR, "history_file/log"))
+SAVE_DIR = os.path.abspath(os.path.join(DIR, "history_file/permission"))
+LOG_FOLDER = os.path.abspath(os.path.join(SAVE_DIR, "log"))
 BACKEND_LOG_FOLDER = os.path.abspath(os.path.join(DIR, "Backend/history_log"))
+
+LOG_FILE = os.path.abspath(os.path.join(LOG_FOLDER, f"github_fork_{CURRENTDAY}.log"))
 
 N = 14
 N_DAYS_AGO = time.time() - (N * 86400)

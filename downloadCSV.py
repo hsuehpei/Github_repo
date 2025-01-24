@@ -10,14 +10,12 @@ import re
 from datetime import datetime
 from changeXlsxName import change_file_name
 
-
-# CHROME_DRIVER_PATH = "C:/Program Files/Google/Chrome/Application/chrome.exe" ###
 DIR = os.getcwd()
 DOWNLOAD_DIR = "C:/Users/admin/Downloads"
 
 CURRENTDAY = datetime.now().strftime("%Y%m%d")
 BACKEND_LOG_FILE = os.path.abspath(os.path.join(DIR, f'Backend/history_log/backend_{CURRENTDAY}.log'))
-LOG_FILE = os.path.abspath(os.path.join(DIR, f'history_file/log/github_fork_{CURRENTDAY}.log'))
+LOG_FILE = os.path.abspath(os.path.join(DIR, f'history_file/permission/log/github_fork_{CURRENTDAY}.log'))
 
 logging.basicConfig(filename=LOG_FILE, level=logging.INFO,encoding='utf-8',
                     format='%(asctime)s - %(levelname)s - %(message)s')

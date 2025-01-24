@@ -19,17 +19,24 @@ import requests
 import time
 from datetime import datetime
 import logging
+import pandas as pd
+import re
+from openpyxl import load_workbook
+from openpyxl.styles import Font, Alignment
+import os
+import sys
 
 DIR = os.getcwd()
 CURRENTDAY = datetime.now().strftime("%Y%m%d")
-OWNER_FILE = f'參考檔案\各組織members_{CURRENTDAY}.xlsx'
+LAST_WEEK = int(CURRENTDAY)-7
+MEMBER_FILE = f'參考檔案\各組織members_{CURRENTDAY}.xlsx'
 LOG_FILE = f"參考檔案\各組織members_{CURRENTDAY}.log"
 
 logging.basicConfig(filename=LOG_FILE, level=logging.INFO,encoding='utf-8',
                     format='%(asctime)s - %(levelname)s - %(message)s')
 
 df_dept = pd.read_excel(os.path.join(DIR, '參考檔案\組織中英對照表.xlsx'))
-df_before = pd.read_excel('參考檔案\各組織members_20241226.xlsx')
+df_before = pd.read_excel(f'參考檔案\各組織members_{LAST_WEEK}.xlsx')
 
 def fetch_all_members(orgName, token):
     url = f"https://api.github.com/orgs/{orgName}/members"
@@ -37,31 +44,53 @@ def fetch_all_members(orgName, token):
         'Authorization': f'token {token}'
     }
     members = []
-    page = 1  # 分頁起始頁
+    page = 1
     per_page = 50
+    max_retries = 5
 
     while True:
-        # 添加分頁參數
         params = {
-            'per_page': per_page,  # 每頁的數量，最大值為 100
-            'page': page     # 當前頁數
+            'per_page': per_page,
+            'page': page
         }
-        response = requests.get(url, headers=headers, params=params)
-        if response.status_code != 200:
-            print(f"Error: {response.status_code}, {response.json()}")
-            break
-
-        # 獲取當前頁數據
-        data = response.json()
+        retries = 0
+        while retries < max_retries:
+            try:
+                response = requests.get(url, headers=headers, params=params)
+                if response.status_code != 200:
+                    print(f"Error: {response.status_code}, {response.json()}")
+                    logging.error(f"Error: {response.status_code}, {response.json()}")
+                    return []
+                if response.status_code == 200:
+                    
+                    data = response.json()
     
-        if not data:  # 如果當前頁無數據，結束循環
-            break
+                    if not data:
+                        return members
 
-        members.extend(data)  # 添加數據到總列表
-        if len(data) < per_page:
-            break        
-        page += 1  # 下一頁
-    return members
+                    members.extend(data)
+                    if len(data) < per_page:
+                        return members   
+                    page += 1
+                    break
+
+            except requests.exceptions.Timeout:
+                retries += 1
+                print(f"Timeout occurred. Retrying ({retries}/{max_retries})...")
+                time.sleep(2)
+
+            except requests.exceptions.RequestException as e:
+                print(f"Request failed: {e}")
+                logging.error(f"Request failed: {e}")
+                return members
+            retries += 1
+            logging.info(f'retrying...{retries}/{max_retries}')
+
+
+        if retries == max_retries:
+            print("Max retries reached.")
+            logging.error(f"Max retries reached in {orgName}.")
+            return members
 
 def get_display_name(row):
     url_name = f"https://api.github.com/users/{row['帳號名稱']}"
@@ -81,9 +110,8 @@ with open(DIR + "\Backend\.env", encoding='utf8') as f:
 df_token = pd.DataFrame(allToken)[1:]
 logging.info(f"共有{len(df_token)}個組織")
 
-# df_OrgOwner = pd.DataFrame(columns=['組織', '帳號名稱', '存取人員'])
 df_OrgOwner = pd.DataFrame(columns=['組織', '帳號名稱'])
-# df_OrgOwner = pd.read_excel(OWNER_FILE)
+# df_OrgOwner = pd.read_excel(MEMBER_FILE)
 logging.info(f"{'-'*10}組織成員{'-'*10}")
 
 for orgName, token in df_token.values:
@@ -95,8 +123,9 @@ for orgName, token in df_token.values:
     }
 
     member = [all['login'] for all in all_members]
+    # print(member)
     newrow = pd.DataFrame({'組織':[orgName]*len(member),
-                           '帳號名稱':[member],})
+                           '帳號名稱':member,})
     df_OrgOwner = pd.concat([df_OrgOwner, newrow], ignore_index=True)
     # for i in range(len(member)):
     #     try:
@@ -116,7 +145,7 @@ for orgName, token in df_token.values:
 
     #     except Exception as e:
     #         print(f'ERROR: \n {e}')
-    #         df_OrgOwner.to_excel(OWNER_FILE, index=False)
+    #         df_OrgOwner.to_excel(MEMBER_FILE, index=False)
     #         logging.error(f"ERROR: {e}")
     #         logging.error(f'組織: {orgName}, 帳號: {member[i]} 處理錯誤')
     #         logging.error(response_role)
@@ -124,7 +153,7 @@ for orgName, token in df_token.values:
     logging.info(f"組織 {orgName:35s} 共 {len(member)} 位成員")
     time.sleep(2)
 
-df_OrgOwner.to_excel(OWNER_FILE, index=False)
+df_OrgOwner.to_excel(MEMBER_FILE, index=False)
 logging.info(f"組織成員獲取結束")
 
 
@@ -140,7 +169,7 @@ for orgName, token in df_token.values:
     
     outside = [all['login'] for all in response_outside]
     newrow = pd.DataFrame({'組織':[orgName]*len(outside),
-                           '帳號名稱':[outside],})
+                           '帳號名稱':outside,})
     df_OrgOwner = pd.concat([df_OrgOwner, newrow], ignore_index=True)
     # if response_outside:
     #     print(orgName)    
@@ -158,12 +187,16 @@ for orgName, token in df_token.values:
     #         df_OrgOwner = pd.concat([df_OrgOwner, newrow], ignore_index=True)
     time.sleep(2)
     logging.info(f"組織 {orgName:35s} 共 {len(response_outside)} 位外部協作者")
-df_OrgOwner.to_excel(OWNER_FILE, index=False)
+df_OrgOwner.to_excel(MEMBER_FILE, index=False)
+print('API request finished')
 
 # mapping display name
 df_before.drop(columns=['組織', '部門'], inplace=True)
+df_before = df_before.drop_duplicates(subset=['帳號名稱'])
+
 df_name = pd.DataFrame(columns=['帳號名稱'])
 df_name['帳號名稱'] = df_OrgOwner['帳號名稱'].unique()
+
 df_name = pd.merge(df_name, df_before, on=['帳號名稱'], how='left')
 df_name['存取人員'] = df_name.apply( lambda row:
     get_display_name(row) if pd.isna(row['存取人員']) else row['存取人員'],
@@ -175,4 +208,52 @@ df_OrgOwner['存取人員'] = df_OrgOwner['存取人員'].apply(lambda x: ''.joi
 logging.info(f"存取人員名稱處理結束")
 df_OrgOwner['組織'] = df_OrgOwner['組織'].apply(lambda x: df_dept.loc[df_dept['org_EN']==x, 'org_CN'].values[0] if x in df_dept['org_EN'].values else x)
 logging.info(f"組織轉中文結束")
-df_OrgOwner.to_excel(OWNER_FILE, index=False)
+df_OrgOwner.to_excel(MEMBER_FILE, index=False)
+
+# get department by display name
+def getDept(name):
+    # 用regex抓英文
+    # print(name)
+    name = name.strip()
+    dept = re.findall(r'^[a-zA-Z0-9_-]+', name)
+    if dept:
+        en = dept[0].upper().replace('-', '_')
+    else:
+        en = name
+    en = re.sub(r'_$', '', en)
+    en = en.replace('ACD_RA2', 'ACD_RD2')
+    en = en.replace('OLR_ART', 'OLD_ART')
+    en = en.replace('ADM_MISSW', 'ADM_MIS')
+    return en
+
+def getDeptByOrg(df):
+    df['部門'] = df['部門'].str.replace(r'_$', '', regex=True)
+    df['部門'] = df.apply(
+        lambda row: df_dept.loc[df_dept['org_CN'] == row['組織'], 'dep'].values[0]
+        if row['部門'] not in df_dept['dep'].values #and row['組織'] in df_dept['org_CN'].values
+        else row['部門']
+        , axis=1
+    )
+    return df
+
+df_OrgOwner['部門'] = df_OrgOwner['存取人員'].apply(getDept)
+df_OrgOwner = getDeptByOrg(df_OrgOwner)
+df_OrgOwner.to_excel(MEMBER_FILE, index=False)
+logging.info(f"獲取存取人員部門")
+
+# edit excel style
+workbook = load_workbook(MEMBER_FILE)
+worksheet = workbook.active
+for cell in worksheet[1]:
+    cell.font = Font(bold=False) 
+    cell.border = None
+    cell.alignment = Alignment(horizontal='left')
+
+    for col in worksheet.columns:
+        col_letter = col[0].column_letter
+        worksheet.column_dimensions[col_letter].width = 16
+
+workbook.save(MEMBER_FILE)
+workbook.close()
+
+

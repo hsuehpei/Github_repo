@@ -1,6 +1,6 @@
 @echo off
 set CSVfile_path=C:\Users\admin\Downloads\all_repositories.csv
-set XLSXfile_path=C:\Users\admin\Desktop\OPO\Github_fork\history_file\all_repositories.xlsx
+set XLSXfile_path=C:\Users\admin\Desktop\OPO\Github_fork\history_file\permission\all_repositories.xlsx
 
 for /f "skip=1 tokens=1" %%a in ('wmic os get localdatetime') do (
     set datetime=%%a
@@ -9,7 +9,6 @@ for /f "skip=1 tokens=1" %%a in ('wmic os get localdatetime') do (
 
 :done
 set ymd=%datetime:~0,8%
-
 set today=%ymd%
 
 :: 將後端日誌文件名設置為包含日期
@@ -43,6 +42,15 @@ python convertToXlsx.py
 
 set convert_status=%errorlevel%
 if %convert_status% neq 0 (
+    echo convert failed, running tg_alert.py
+    goto :end
+)
+
+echo start add department
+python getDeptByName.py
+
+set department_status=%errorlevel%
+if %department_status% neq 0 (
     echo convert failed, running tg_alert.py
     goto :end
 )

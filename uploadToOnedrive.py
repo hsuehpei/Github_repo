@@ -1,27 +1,36 @@
+"""
+This script automates the process of logging into OneDrive, navigating to a shared folder, 
+and uploading an Excel file using Selenium WebDriver and AutoIt for handling Windows file dialogs.
+
+Main features:
+1. Logs into OneDrive using the provided credentials securely stored in environment variables.
+2. Navigates to the shared folder named "Github儀錶板用".
+3. Uploads the specified Excel file by interacting with the Windows file selection dialog via AutoIt.
+4. Handles potential file overwrite scenarios by confirming the replacement.
+5. Implements retry logic to handle login failures and ensures a maximum number of attempts.
+6. Captures screenshots and logs error messages for easier monitoring and debugging.
+7. Ensures proper logging of each step to facilitate troubleshooting and process validation.
+"""
+
 from selenium import webdriver
 from selenium.webdriver.common.by import By
-from selenium.webdriver.chrome.service import Service
 from selenium.webdriver.support.ui import WebDriverWait
-from selenium.common.exceptions import NoSuchElementException
 from selenium.webdriver.support import expected_conditions as EC
 import autoit
 from datetime import datetime
-import ctypes
 import sys
 import time
 import os
 import logging
 
-# ChromeDriver 
-# CHROME_DRIVER_PATH = "C:/Program Files/Google/Chrome/Application/chrome.exe"
 DIR = os.getcwd()
 CURRENTDAY = datetime.now().strftime("%Y%m%d")
 ACCOUNT = "dorispeiyu@gmail.com"
 PASSWORD = os.environ.get('ONEDRIVE_PASSWORD')
 
-SAVE_DIR = os.path.abspath(os.path.join(DIR, "history_file"))
+SAVE_DIR = os.path.abspath(os.path.join(DIR, "history_file/permission"))
 SAVE_PATH = os.path.abspath(os.path.join(SAVE_DIR, "all_repositories.xlsx"))
-LOG_FILE = os.path.abspath(os.path.join(DIR, f"history_file/log/github_fork_{CURRENTDAY}.log"))
+LOG_FILE = os.path.abspath(os.path.join(SAVE_DIR, f"log/github_fork_{CURRENTDAY}.log"))
 
 
 logging.basicConfig(filename=LOG_FILE, level=logging.INFO,encoding='utf-8',
@@ -101,6 +110,7 @@ except Exception as e:
 try: # upload file
     time.sleep(3)
     add_button = WebDriverWait(driver, 15).until(
+        # EC.presence_of_element_located((By.XPATH, "/html/body/div[1]/div/div[2]/div/div/div[1]/div/nav/div[1]/div[1]/div/span/button"))
         EC.element_to_be_clickable((By.XPATH, '//button[@data-id="AddNew" and @title="新增新的"]'))
 
     )
@@ -108,6 +118,8 @@ try: # upload file
     
     time.sleep(3)
     file_upload = WebDriverWait(driver, 15).until(
+        # EC.element_to_be_clickable((By.XPATH, "//button[contains(@title, '檔案上傳')]"))
+        # EC.element_to_be_clickable((By.XPATH, "/html/body/div[3]/div/div/div/div/div/div/div/ul/li[3]/button"))
         EC.element_to_be_clickable((By.XPATH, '//button[@title="檔案上傳" and @data-automationid="UploadFileCommand"]'))
 
     )
@@ -117,6 +129,8 @@ try: # upload file
     time.sleep(3)
 
 except Exception as e:
+    driver.save_screenshot(os.path.join(SAVE_DIR, f'log/{CURRENTDAY}_selectFolderError.png'))
+    logging.error("擷取螢幕畫面")    
     logging.error(f"點選上傳檔案失敗: {e}")  
     sys.exit(1)
 
@@ -129,7 +143,9 @@ try:
             autoit.win_activate("開啟")
         logging.info('喚醒開啟視窗')
     except Exception as e:
-        logging.error(f'喚醒開啟視窗報錯{e}')   
+        driver.save_screenshot(os.path.join(SAVE_DIR, f'log/{CURRENTDAY}_activateWindowError.png'))
+        logging.error("擷取螢幕畫面")        
+        logging.error(f'喚醒開啟視窗錯誤{e}')
     
 
     autoit.control_send("開啟", "Edit1", SAVE_PATH)
@@ -141,12 +157,18 @@ try:
     time.sleep(5)
     
 except Exception as e:
+    driver.save_screenshot(os.path.join(SAVE_DIR, f'log/{CURRENTDAY}_selectFileError.png'))
+    logging.error("擷取螢幕畫面")
     logging.error(f"在win視窗選擇檔案失敗: {e}")  
     sys.exit(1)
 
 try:
     time.sleep(5)
-
+    # if autoit.win_exists("開啟"):
+    #     logging.error(f"檔名輸入錯誤或檔案不存在，輸入為{file_entered}")
+    #     sys.exit(1)
+    
+    # else:
     upload_confirm = WebDriverWait(driver, 15).until(
         EC.element_to_be_clickable((By.XPATH, "//span[text()='取代']"))
     )
@@ -156,7 +178,9 @@ try:
     sys.exit(0)
 
 except Exception as e:
-    logging.error(f"開啟或取代檔案失敗: {e}")  
+    driver.save_screenshot(os.path.join(SAVE_DIR, f'log/{CURRENTDAY}_uploadError.png'))
+    logging.error("擷取螢幕畫面")
+    logging.error(f"開啟或取代檔案失敗: {e}")
     sys.exit(1)
 
 

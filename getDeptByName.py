@@ -1,5 +1,6 @@
 '''
-get department by display name
+This script adds department information to an Excel file based on display names 
+and organization mappings.
 '''
 
 import pandas as pd

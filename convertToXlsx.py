@@ -7,14 +7,15 @@ import logging
 import sys
 from datetime import datetime
 
+CURRENTDAY = datetime.now().strftime("%Y%m%d")
+
 DIR = os.getcwd()
 DOWNLOAD_DIR = "C:/Users/admin/Downloads"
+SAVE_DIR = os.path.abspath(os.path.join(DIR, "history_file/permission"))
 
-SAVE_DIR = os.path.abspath(os.path.join(DIR, "history_file"))
 CSV_PATH = os.path.abspath(os.path.join(DOWNLOAD_DIR, "all_repositories.csv"))
-XLSX_PATH = os.path.abspath(os.path.join(SAVE_DIR, "all_repositories.xlsx"))
-CURRENTDAY = datetime.now().strftime("%Y%m%d")
-LOG_FILE = os.path.abspath(os.path.join(DIR, f"history_file/log/github_fork_{CURRENTDAY}.log"))
+XLSX_PATH = os.path.abspath(os.path.join(SAVE_DIR, f"all_repositories.xlsx"))
+LOG_FILE = os.path.abspath(os.path.join(SAVE_DIR, f"log/github_fork_{CURRENTDAY}.log"))
 
 logging.basicConfig(filename=LOG_FILE, level=logging.INFO,encoding='utf-8',
                     format='%(asctime)s - %(levelname)s - %(message)s')
