@@ -2,7 +2,7 @@
 This script retrieves the commit list of multiple organizations from the GitHub API within a specified time range and outputs the processed results as Excel files.
 Main features:
 1. Retrieves all repositories for each organization using multiple tokens.
-2. Fetches commit records from the last month for each repository.
+2. Fetches commit records within the specified time period for each repository.
 3. Extracts commit details, including the committer, commit message, modified files, 
    and change statistics (additions, deletions, changes).
 4. Matches committers with internal access personnel records to complete the information.
@@ -20,27 +20,17 @@ from datetime import datetime, date, timedelta
 import requests
 import time
 import logging
+from openpyxl import load_workbook
+from openpyxl.styles import Font, Alignment
+import re
 
-today = date.today()
+
+today = date.today()- timedelta(days=6)
 yesterday = today - timedelta(days=1)
-
 TODAY = today.strftime("%Y%m%d")
 YESTERDAY = yesterday.strftime("%Y%m%d")
-DIR = os.getcwd()
-LOG_FILE = os.path.abspath(os.path.join(DIR, f"history_file/commit/log/commit_{TODAY}.log"))
-
-logging.basicConfig(filename=LOG_FILE, level=logging.INFO,encoding='utf-8',
-                    format='%(asctime)s - %(levelname)s - %(message)s')
-
-df_dept = pd.read_excel(os.path.join(DIR, '參考檔案/組織中英對照表.xlsx'))
-df_login = pd.read_excel('參考檔案/各組織contributors_20250106.xlsx')
-
 end = yesterday.strftime('%Y-%m-%dT23:59:59Z')
 start = yesterday.strftime('%Y-%m-01T00:00:00Z')
-
-COMMIT_FOLDER = os.path.abspath(os.path.join(DIR, "history_file/commit"))
-COMMIT_FOLDER_MONTH = os.path.abspath(os.path.join(COMMIT_FOLDER, yesterday.strftime('%Y%m')))
-os.makedirs(COMMIT_FOLDER_MONTH, exist_ok=True)
 
 options = {
     "since" : {
@@ -50,7 +40,23 @@ options = {
         "datetime" : end
         }
 }
+
+DIR = os.getcwd()
+LOG_FILE = os.path.abspath(os.path.join(DIR, f"history_file/commit/log/commit_{TODAY}.log"))
+COMMIT_FOLDER = os.path.abspath(os.path.join(DIR, "history_file/commit"))
+COMMIT_FOLDER_MONTH = os.path.abspath(os.path.join(COMMIT_FOLDER, yesterday.strftime('%Y%m')))
+os.makedirs(COMMIT_FOLDER_MONTH, exist_ok=True)
+
+logging.basicConfig(filename=LOG_FILE, level=logging.INFO,encoding='utf-8',
+                    format='%(asctime)s - %(levelname)s - %(message)s')
+
 logging.info(f"開始時間: {options['since']['datetime']}，結束時間: {options['until']['datetime']}")
+
+df_dept = pd.read_excel(os.path.join(DIR, '參考檔案/組織中英對照表.xlsx'))
+df_login = pd.read_excel('參考檔案/各組織contributors_20250106.xlsx')
+
+df_login = df_login[['帳號名稱', '存取人員']].drop_duplicates()
+name_to_person_map = df_login.set_index('帳號名稱')['存取人員']
 
 allToken = []
 with open(DIR + "\Backend\.env", encoding='utf8') as f:
@@ -62,12 +68,11 @@ with open(DIR + "\Backend\.env", encoding='utf8') as f:
             allToken.append({'org': key.strip(), 'token': value.strip()})
 df_token = pd.DataFrame(allToken)[1:]
 
-
 def fetch_all_page(url, headers):
     content = []
-    page = 1
+    page = 1  # 分頁起始頁
     per_page = 75
-    max_retries = 5
+    max_retries = 5  # 最大重試次数
 
     while True:
         params = {
@@ -78,7 +83,7 @@ def fetch_all_page(url, headers):
         while retries < max_retries:
             try:
                 response = requests.get(url, headers=headers, params=params, timeout=10)
-                if response.status_code == 409: # empty repo
+                if response.status_code == 409: # 空repo
                     return []
                 elif response.status_code != 200:
                     logging.error(f"Error: {response.status_code}, {response.json()}")
@@ -104,15 +109,13 @@ def fetch_all_page(url, headers):
             except requests.exceptions.RequestException as e:
                 print(f"Request failed: {e}")
                 return content
-            logging.info(f'retrying...{retries}/{max_retries}')
+            # logging.info(f'retrying...{retries}/{max_retries}')
         if retries == max_retries:
-            print("Max retries reached.")
+            logging.error("Max retries reached.")
             return content
-
-no_commit_org = []
-ls_to_concat = []
-try:
-    for orgName, token in df_token.values:
+        
+def get_commits(orgName, token):
+    try:
         logging.info(f"組織: {orgName:35s} 開始")
         start_org = datetime.now()
         COMMIT_FILE = os.path.abspath(os.path.join(COMMIT_FOLDER_MONTH, f"commit_lines_{orgName}_{YESTERDAY}.xlsx"))
@@ -131,23 +134,45 @@ try:
             ls_to_concat = []
             url = f'https://api.github.com/repos/{orgName}/{repo}/commits?since={options["since"]["datetime"]}&until={options["until"]["datetime"]}'
             all_commit = fetch_all_page(url, headers)
-            logging.info(f"{repo:45s} 共 {len(all_commit):3d} 個commit")
+            logging.info(f"{repo:55s} 共 {len(all_commit):3d} 個commit")
             
             if all_commit:
                 for i, commit in enumerate(all_commit):
                     retries = 0
-
-                    while retries < 5:
+                    sha_json = None
+                    while retries < 3:
                         try:
                             url = f"https://api.github.com/repos/{orgName}/{repo}/commits/{commit['sha']}"
                             response = requests.get(url, headers=headers)
-                            sha_json = response.json()
+                            if response.status_code == 200:
+                                sha_json = response.json()
+                                break
+
                             # logging.info(sha_json)
-                            break
+                            logging.error(f"Error: {response.status_code}, {response.text}")
+                            logging.error(f"url: {url}")
+                            retries += 1
+                            time.sleep(10)
+                            logging.info('retrying')
+                            continue
+
+                                
                         except requests.exceptions.Timeout:
                             retries += 1
-                            logging.error(f"Timeout occurred. Retrying ({retries}/5)...")
-                            time.sleep(2)
+                            logging.error(f"Timeout occurred. Retrying ({retries}/3)...")
+                            time.sleep(5)
+                        except requests.exceptions.ChunkedEncodingError:
+                            retries += 1
+                            logging.error(f"ChunkedEncodingError occurred. Retrying ({retries}/3)...")
+                            time.sleep(5) 
+                        except Exception as e:
+                            retry += 1
+                            logging.error(f"other exceptions {e}. Retrying ({retries}/3)...")
+                            time.sleep(5)
+
+                    if not sha_json:
+                        logging.warning(f"[{commit['sha']}] Failed after retries. Skipping commit.")
+                        continue
 
                     files = sha_json.get('files', [])
                     if files:
@@ -174,7 +199,6 @@ try:
                         'del': deletions,
                         'changes': changes,
                     })
-
                     print(f'new_row:{new_row.values}')
                     ls_to_concat.append(new_row)
 
@@ -189,41 +213,22 @@ try:
             logging.info(f"{orgName} 共 {df_sha.shape[0]} 列")
             logging.info(f"{orgName} 花費時間: {datetime.now() - start_org}")
         else:
+            global no_commit_org
             no_commit_org.append(orgName)
             logging.info(f"{orgName} 無commit")
 
-except Exception as e:
-    logging.error(f"Error: {e}")
-    if sha_json:
-        logging.error(f'sha_json: {sha_json}')
-    if ls_to_concat:
-        df_sha = pd.concat(ls_to_concat, ignore_index=True)
-        logging.info(f"Error後concat{len(ls_to_concat)}筆資料")
-    df_sha.to_excel(COMMIT_FILE, index=False, engine='xlsxwriter')
-    logging.info(f"except 存檔完成")    
-    raise e
-
-end = datetime.now()
-logging.info(f"組織 {no_commit_org} 無commit")
-
-no_commit_org = []
-df_login = df_login[['帳號名稱', '存取人員']].drop_duplicates()
-name_to_person_map = df_login.set_index('帳號名稱')['存取人員']
-
-def get_display_name(login):
-    """根據 login 帳號名稱從 API 獲取對應的顯示名稱"""
-    url_name = f"https://api.github.com/users/{login}"
-    try:
-        response_name = requests.get(url_name, headers=headers).json()
-        if 'name' in response_name and response_name['name']:
-            return response_name['name']
-        elif 'login' in response_name:
-            return response_name['login']
-        else:
-            return login
     except Exception as e:
-        logging.error(f"Failed to fetch name for {login}: {e}")
-        return login 
+        logging.error(f"Error: {e}")
+        if sha_json:
+            logging.error(f'sha_json: {sha_json}')
+            logging.error(f'respone code: {response.status_code}')
+        if ls_to_concat:
+            df_sha = pd.concat(ls_to_concat, ignore_index=True)
+            logging.info(f"Error 後 concat {len(ls_to_concat)} 筆資料")
+        df_sha.to_excel(COMMIT_FILE, index=False, engine='xlsxwriter')
+        logging.info(f"except 存檔完成")
+        raise e
+
 
 def assign_person(row):
     """對每個 row 進行判斷並賦值"""
@@ -244,9 +249,8 @@ def assign_person(row):
         return row['committer2']
     elif row['committer1'] == 'System':
         return 'System'    
-
-def name_api(row):
-    logging.info(row)
+    
+def name_api(row, headers):
     if not pd.isna(row['committer2']):
         try:
             url_name = f"https://api.github.com/users/{row['committer2']}"
@@ -264,67 +268,119 @@ def name_api(row):
             url_name = f"https://api.github.com/users/{row['committer1']}"
             logging.info(f"打api:{row['committer1']}")
             response_name = requests.get(url_name, headers=headers).json()
-            if response_name['name'] is not None:
+            if response_name.get('name', None) is not None:
                 return response_name['name']
         except Exception as e:
             logging.error(url_name, e)
 
     return row['committer1']
 
-for orgName, token in df_token.values:
+def get_person(orgName, token):
     logging.info(f"{orgName:20s} 檔案處理")
     headers = {
         'Authorization' : f'token {token}',
     }
 
+    COMMIT_FILE = os.path.abspath(os.path.join(COMMIT_FOLDER_MONTH, f"commit_lines_{orgName}_{YESTERDAY}.xlsx"))
+    df_commit = pd.read_excel(COMMIT_FILE)
+    
+    # 處理displayname空格等問題
+    df_commit['committer1'] = df_commit['committer1'].apply(lambda x: ''.join(x.split(' ')) if isinstance(x, str) else x)
+    df_commit['committer2'] = df_commit['committer2'].apply(lambda x: ''.join(x.split(' ')) if isinstance(x, str) else x)
+
+    df_commit['存取人員'] = None
+    df_commit['存取人員'] = df_commit.apply(assign_person, axis=1)
+
+    # 要打API的人
+    df_filtered = df_commit.loc[df_commit['存取人員'].isna(), ['committer1', 'committer2']]
+    df_strange = df_filtered.drop_duplicates(subset='committer1', keep='first').reset_index(drop=True)
+    if not df_strange.empty:
+        df_strange['存取人員'] = df_strange.apply(lambda row: name_api(row, headers), axis=1)
+        df_strange_filtered = df_strange[['committer1', '存取人員']]
+        df_commit = df_commit.merge(df_strange_filtered, on='committer1', how='left', suffixes=('', '_strange'))
+
+        df_commit['存取人員'] = df_commit['存取人員'].fillna(df_commit['存取人員_strange'])
+        df_commit.drop(columns=['存取人員_strange'], inplace=True)
+
+
+    df_commit['組織'] = df_commit['組織'].apply(lambda x: df_dept.loc[df_dept['org_EN']==x, 'org_CN'].values[0] if x in df_dept['org_EN'].values else x)
+    logging.info(f"組織轉中文結束")
+
+    df_commit.to_excel(COMMIT_FILE, index=False)
+    logging.info(f"寫入{COMMIT_FILE}完成")    
+
+no_commit_org = []
+ls_to_concat = []
+
+for orgName, token in df_token.values:
+    get_commits(orgName, token)
+    logging.info(f'處理{orgName}')
+
     if orgName in no_commit_org:
-        logging.info(f"{orgName:20s} 無commit")
+        logging.info(f"{orgName:20s} 無commit，不處裡檔案")
     else:
-        COMMIT_FILE = os.path.abspath(os.path.join(COMMIT_FOLDER_MONTH, f"commit_lines_{orgName}_{YESTERDAY}.xlsx"))
-        df_commit = pd.read_excel(COMMIT_FILE)
-        
-        # 處理displayname空格等問題
-        df_commit['committer1'] = df_commit['committer1'].apply(lambda x: ''.join(x.split(' ')) if isinstance(x, str) else x)
-        df_commit['committer2'] = df_commit['committer2'].apply(lambda x: ''.join(x.split(' ')) if isinstance(x, str) else x)
+        get_person(orgName, token)
 
-        df_commit['存取人員'] = None
-        df_commit['存取人員'] = df_commit.apply(assign_person, axis=1)
+logging.info(f"組織 {no_commit_org} 無commit")
+logging.info(f"組織數量: {df_token.shape[0]}")
 
-        # 要打API的人
-        df_filtered = df_commit.loc[df_commit['存取人員'].isna(), ['committer1', 'committer2']]
-        df_strange = df_filtered.drop_duplicates(subset='committer1', keep='first').reset_index(drop=True)
-        if not df_strange.empty:
-            df_strange['存取人員'] = df_strange.apply(name_api, axis=1)
-            df_strange_filtered = df_strange[['committer1', '存取人員']]
-            df_commit = df_commit.merge(df_strange_filtered, on='committer1', how='left', suffixes=('', '_strange'))
-
-            df_commit['存取人員'] = df_commit['存取人員'].fillna(df_commit['存取人員_strange'])
-            df_commit.drop(columns=['存取人員_strange'], inplace=True)
-
-
-        df_commit['組織'] = df_commit['組織'].apply(lambda x: df_dept.loc[df_dept['org_EN']==x, 'org_CN'].values[0] if x in df_dept['org_EN'].values else x)
-        logging.info(f"組織轉中文結束")
-
-        df_commit.to_excel(COMMIT_FILE, index=False)
-        logging.info(f"寫入{COMMIT_FILE}完成")
-
-logging.info(f"{df_token.shape[0]}個組織檔案處裡完成")
-# logging.info(f"excel花費時間: {datetime.now() - end}")
-
-
-xlsx_files = [f for f in os.listdir(COMMIT_FOLDER_MONTH) if f.endswith(f'{YESTERDAY}.xlsx')]
+xlsx_files = [f for f in os.listdir(COMMIT_FOLDER_MONTH) if f.endswith('.xlsx') and f.startswith('commit_lines')]
 logging.info(f'{len(xlsx_files)}個檔案待合併')
+
 # 合併所有檔案
-df_combined = pd.DataFrame()  # 初始化空的 DataFrame
+df_combined = pd.DataFrame()
 for file in xlsx_files:
     file_path = os.path.join(COMMIT_FOLDER_MONTH, file)
     df = pd.read_excel(file_path)
     df_combined = pd.concat([df_combined, df], ignore_index=True)
 
-# 將合併結果保存為新的 Excel 文件
 output_file = os.path.join(COMMIT_FOLDER_MONTH, f'combined_{YESTERDAY}.xlsx')
 df_combined.to_excel(output_file, index=False)
 logging.info('檔案合併成功')
+
+# 新增部門
+def getDept(name):
+    name = name.strip()
+    dept = re.findall(r'^[a-zA-Z0-9_-]+', name)
+    if dept:
+        en = dept[0].upper().replace('-', '_')
+    else:
+        en = name
+    en = re.sub(r'_$', '', en)
+    en = re.sub(r'-$', '', en)
+    en = en.replace('ACD_RA2', 'ACD_RD2')
+    en = en.replace('OLR_ART', 'OLD_ART')
+    en = en.replace('ADM_MISSW', 'ADM_MIS')
+    return en
+
+def getDeptByOrg(df):
+    df['部門'] = df['部門'].str.replace(r'_$', '', regex=True)
+    df['部門'] = df.apply(
+        lambda row: df_dept.loc[df_dept['org_CN'] == row['組織'], 'dep'].values[0]
+        if row['部門'] not in df_dept['dep'].values #and row['組織'] in df_dept['org_CN'].values
+        else row['部門']
+        , axis=1
+    )
+    return df
+
+try:
+    df_OrgOwner = pd.read_excel(output_file)
+    df_OrgOwner['部門'] = df_OrgOwner['存取人員'].apply(getDept)
+    logging.info('成功取得 display name 前的部門')
+    df_OrgOwner = getDeptByOrg(df_OrgOwner)
+    logging.info('成功取得 org 部門')
+    df_OrgOwner.to_excel(output_file, sheet_name='all_repositories', index=False)
+except Exception as e:
+    logging.error(f'取得部門失敗{e}')
+
+workbook = load_workbook(output_file)
+worksheet = workbook.active
+for cell in worksheet[1]:
+    cell.font = Font(bold=False) 
+    cell.border = None
+    cell.alignment = Alignment(horizontal='left')
+workbook.save(output_file)
+workbook.close()
 
 
 # each_month = [int(f) for f in os.listdir(COMMIT_FOLDER) if f!='log']
